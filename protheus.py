@@ -337,6 +337,11 @@ def move_to_apo(filepath, instdir):
     targfile = os.path.join(instdir, 'apo', filename)
     copy_file_with_replace(filepath, targfile)
 
+    # check rpo version
+    versao = re.search('(\d+).rpo', filename, re.I).groups()
+    if len(versao) > 0:
+        print('export RPOVERSION={0}'.format(versao[0]))
+
 
 '''
 identify package to install and start install process

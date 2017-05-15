@@ -19,7 +19,7 @@ CREATE ROLE vagrant CREATEDB LOGIN PASSWORD 'vagrant';
 EOF
 
 # criando banco para o usuario vagrant
-su - vagrant -c "createdb -T template0 -E win1252 -l POSIX vagrant"
+su - vagrant -c "createdb -T template0 -E win1252 -l POSIX protheus"
 
 ################################################################################
 ## configura o data source do odbc
@@ -29,12 +29,12 @@ su - vagrant -c "createdb -T template0 -E win1252 -l POSIX vagrant"
 cat <<EOF > /etc/odbc.ini
 
 ; inicio configucacao padrao
-[protheus12]
+[protheus]
 Description         = ODBC padrao protheus12
 Driver              = PostgreSQL Unicode
 Trace               = Yes
 TraceFile           = sql.log
-Database            = vagrant
+Database            = protheus
 Servername          = localhost
 UserName            = vagrant
 Password            = vagrant
@@ -50,6 +50,9 @@ ConnSettings        =
 
 EOF
 
+# banco configurado
+export TOPDATABASE=POSTGRES
+
 chown vagrant.vagrant /etc/odbc.ini
 
 ################################################################################
@@ -58,12 +61,25 @@ chown vagrant.vagrant /etc/odbc.ini
 
 # instala os arquivos
 cd /vagrant
-python3 protheus.py --install
+python3 protheus.py --install > variaveis.sh
 
+# ajustes de permissoes
 chmod -R 0775 /protheus
 chown -R vagrant.vagrant /protheus
 
+# copiando script de controle
 cp /vagrant/protheus.py /protheus
+
+# isso vai gerar apartir do install, por enquanto fixo
+export RPOLANGUAGE=portuguese
+export RPOVERSION=120
+export REGIONALLANGUAGE=bra
+
+# carrega informacoes do instalador
+source variaveis.sh
+
+# acessando diretorio do ambiente
+cd /protheus
 
 ################################################################################
 ## configura o dbaccess para o banco postgres
@@ -73,22 +89,25 @@ cp /vagrant/protheus.py /protheus
 odbclib=$(du -a /usr/lib/ | grep -i libodbc.so.1 | awk '$1==0{print($2)}')
 
 # configurando o dbaccess para o banco
-cat <<EOF > /protheus/dbaccess/multi/dbaccess.ini
+cat <<EOF > ${PWD}/dbaccess/multi/dbaccess.ini
 
 [General]
 LicenseServer=
 LicensePort=0
 ByYouProc=0
 
-[POSTGRES/protheus12]
+[POSTGRES/protheus]
 user=vagrant
 password=$(echo -e "\x9e\xff\xe7\xf6\xbf\xb2\x8c")
 
 [POSTGRES]
-environments=protheus12
+environments=protheus
 clientlibrary=${odbclib}
 
 EOF
+
+# alias configurado
+export TOPALIAS=protheus
 
 chown vagrant.vagrant /protheus/dbaccess/multi/dbaccess.ini
 
@@ -96,55 +115,8 @@ chown vagrant.vagrant /protheus/dbaccess/multi/dbaccess.ini
 ## configura o appserver para utilizar esse arquivo
 ################################################################################
 
-# acessando diretorio do ambiente
-cd /protheus
-
 # configurado o appserver
-cat <<EOF > /protheus/bin/appserver/appserver.ini
-[PROTHEUS12]
-SOURCEPATH=${PWD}/apo
-ROOTPATH=${PWD}/protheus_data
-STARTPATH=/system/
-RPODB=Top
-RPOLANGUAGE=portuguese
-RPOVERSION=120
-TRACE=0
-PICTFORMAT=DEFAULT
-DATEFORMAT=DEFAULT
-LOCALFILES=ctree
-LOCALDBEXTENSION=.dtc
-REGIONALLANGUAGE=BRA
-TOPDATABASE=postgres
-TOPSERVER=LOCALHOST
-TOPPORT=7890
-TOPALIAS=protheus12
-HELPSERVER=help.outsourcing.com.br/p12
-
-[Drivers]
-ACTIVE=TCP
-
-[TCP]
-TYPE=TCPIP
-PORT=5555
-
-[LICENSECLIENT]
-;SERVER=10.171.65.24
-;port=5555
-
-[TDS]
-ALLOWAPPLYPATCH=SPOD135
-ALLOWEDIT=SPOD1135
-
-[General]
-BUILDKILLUSERS=1
-SERIE===AV
-SEGMENTO=YddTQHWW=VZF=yhu
-CONSOLELOG=1
-
-[HTTP]
-ENABLE=1
-PORT=1080
-EOF
+envsubst < /vagrant/appserver.ini > ${PWD}/bin/appserver/appserver.ini
 
 chown vagrant.vagrant ${PWD}/bin/appserver/appserver.ini
 
