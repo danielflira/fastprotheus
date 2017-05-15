@@ -1,34 +1,401 @@
 #!/usr/bin/python
 
-import subprocess, os, shutil, stat, argparse
+import logging, zipfile, tarfile, re, os, stat, shutil, argparse, subprocess
+
+logging.basicConfig(format='%(asctime)s %(levelname)s: %(message)s', level=logging.INFO)
 
 
-def unzip_to(filename, changedir='.'):
-    subprocess.check_output(['unzip', filename, '-d', changedir])
+def copy2_safe(origpath, targpath):
+    if os.path.islink(origpath):
+        linkto = os.readlink(origpath)
+        os.symlink(linkto, targpath)
+    else:
+        os.chmod(origpath, stat.S_IWRITE)
+        shutil.copy2(origpath, targpath)
 
 
-def untar_to(filename, changedir='.'):
-    subprocess.check_output(['tar', '-xzf', filename, '-C', changedir])
+def move_safe(origpath, targpath):
+    if os.path.islink(origpath):
+        linkto = os.readlink(origpath)
+        os.symlink(linkto, targpath)
+        os.remove(origpath)
+    elif os.path.isdir(origpath):
+        os.chmod(origpath, stat.S_IWRITE)
+        os.rename(origpath, targpath)
+    else:
+        os.chmod(origpath, stat.S_IWRITE)
+        shutil.copy2(origpath, targpath)
+        os.remove(origpath)
 
 
-def clean_sandbox():
-    shutil.rmtree('sandbox')
-    create_sandbox()
+def makedirs_safe(dirpath):
+    dirpath2 = os.path.dirname(dirpath)
+    if dirpath == dirpath2:
+        return
+    makedirs_safe(dirpath2)
+    if not os.path.isdir(dirpath):
+        os.mkdir(dirpath)
 
 
-def create_sandbox():
+def rmdir_safe(dirpath):
+    if not os.path.exists(dirpath):
+        return
+    for dirname in os.listdir(dirpath):
+        rmdir_safe(os.path.join(dirpath, dirname))
+    os.rmdir(dirpath)
+
+
+def rename_safe(sourcepath, targetpath):
+    if not os.path.islink(sourcepath):
+        os.chmod(sourcepath, stat.S_IWRITE)
+    move_safe(sourcepath, targetpath)
+
+
+def remove_safe(sourcepath):
+    if not os.path.islink(sourcepath):
+        os.chmod(sourcepath, stat.S_IWRITE)
+    os.remove(sourcepath)
+
+
+def move_dir_with_replace(dirpath, dirtarget):
+    # backup current dir
+    here = os.getcwd()
     try:
-        os.mkdir('sandbox')
+        # move file
+        os.chdir(dirpath)
+        for path, dirs, files in os.walk('.'):
+            for file in files:
+                origpath = os.path.join(path, file)
+                targpath = os.path.join(dirtarget, path, file)
+                if os.path.exists(targpath):
+                    remove_safe(targpath)
+                makedirs_safe(os.path.dirname(targpath))
+                rename_safe(origpath, targpath)
+        os.chdir(here)
+        return True
     except:
-        pass
+        os.chdir(here)
+        return False
 
 
-def try_remove(filepath):
+def copy_dir_with_replace(dirpath, dirtarget):
+    # backup current dir
+    here = os.getcwd()
     try:
-        os.remove(filepath)
-    except PermissionError:
-        os.chmod(filepath, stat.S_IWUSR)
-        os.remove(filepath)
+        # move file
+        os.chdir(dirpath)
+        for path, dirs, files in os.walk('.'):
+            for file in files:
+                origpath = os.path.join(path, file)
+                targpath = os.path.join(dirtarget, path, file)
+                if os.path.exists(targpath):
+                    remove_safe(targpath)
+                makedirs_safe(os.path.dirname(targpath))
+                copy2_safe(origpath, targpath)
+        os.chdir(here)
+        return True
+    except:
+        os.chdir(here)
+        return False
+
+
+def copy_file_with_replace(filepath, filetarg):
+    dirtarg = os.path.dirname(filetarg)
+    if os.path.exists(filetarg):
+        remove_safe(filetarg)
+    makedirs_safe(dirtarg)
+    copy2_safe(filepath, filetarg)
+
+
+def remove_files(dirpath):
+    for path, dirs, files in os.walk(dirpath):
+        for filename in files:
+            filepath = os.path.join(path, filename)
+            remove_safe(filepath)
+    rmdir_safe(dirpath)
+
+
+def unzip_with_replace(filepath, target):
+    zfp = zipfile.ZipFile(filepath, mode='r')
+    zfp.extractall(target)
+    zfp.close()
+
+
+def unzip_with_replace_safe(filepath, target):
+    try:
+        unzip_with_replace(filepath, target)
+        return True
+    except:
+        logging.debug('{0} nao eh um zip'.format(filepath))
+        return False
+
+
+def untar_with_replace(filepath, target):
+    tfp = tarfile.open(filepath, mode='r')
+    tfp.extractall(target)
+    tfp.close()
+
+
+def untar_with_replace_safe(filepath, target):
+    try:
+        untar_with_replace(filepath, target)
+        return True
+    except:
+        logging.debug('{0} nao eh um tar'.format(filepath))
+        return False
+
+
+def uncompress(filepath, target):
+    if not unzip_with_replace_safe(filepath, target):
+        if not untar_with_replace_safe(filepath, target):
+            return False
+    return True
+
+
+def unpack_all_files(dirname):
+    for path, dirs, files in os.walk(dirname):
+        for file in files:
+            filepath = os.path.join(path, file)
+            extension = os.path.splitext(file)[1].lower()
+            if extension in ['.zip', '.gz', '.bz2', '.z']:
+                if uncompress(filepath, path):
+                    remove_safe(filepath)
+                else:
+                    return False
+    return True
+
+
+'''
+dbaccess install process for linux
+'''
+
+def prepare_linux_dbaccess(filepath, workdir):
+    dirpath = os.path.dirname(filepath)
+    filename = os.path.basename(filepath)
+
+    logging.info("preparando ({0})".format(filename))
+
+    # unpack files and subfiles
+    uncompress(filepath, workdir)
+    unpack_all_files(workdir)
+
+
+def install_linux_dbaccess(workdir, instdir):
+    targdir = os.path.join(instdir, 'dbaccess')
+    logging.info("instalando dbaccess")
+
+    # fix: test result
+    move_dir_with_replace(workdir, targdir)
+
+
+'''
+protheus binary install process for linux
+'''
+
+def prepare_linux_binario(filepath, workdir):
+    dirpath = os.path.dirname(filepath)
+    filename = os.path.basename(filepath)
+
+    logging.info("preparando ({0})".format(filename))
+
+    # unpack files and subfiles
+    unzip_with_replace(filepath, workdir)
+    
+    # duas passadas que tem bastante coisa...
+    unpack_all_files(workdir)
+    unpack_all_files(workdir)
+
+    # rename smartclient
+    oname = os.path.join(workdir, 'smartclientLinux')
+    tname = os.path.join(workdir, 'smartclient')
+    rename_safe(oname, tname)
+
+    # rename appserver
+    oname = os.path.join(workdir, 'appserverLinux')
+    tname = os.path.join(workdir, 'appserver')
+    rename_safe(oname, tname)
+
+    # appserver dir
+    appserverdir = tname
+
+    # rename appserver binary
+    oname = os.path.join(appserverdir, 'appsrvlinux')
+    tname = os.path.join(appserverdir, 'appserver')
+    rename_safe(oname, tname)
+
+    # verifica maior ace
+    acepath = ''
+    for path, dirs, files in os.walk(appserverdir):
+        for dirname in dirs:
+            if dirname.startswith('ace_'):
+                if dirname > acepath:
+                    acepath = dirname
+    acepath = os.path.join(appserverdir, acepath)
+    copy_dir_with_replace(acepath, '..')
+
+
+def install_linux_binario(workdir, instdir):
+    targdir = os.path.join(instdir, 'bin')
+    logging.info("instalando binario")
+
+    # fix: test result
+    move_dir_with_replace(workdir, targdir)
+
+
+'''
+protheus dictionary install process
+'''
+
+def prepare_dicionario(filepath, workdir):
+    dirpath = os.path.dirname(filepath)
+    filename = os.path.basename(filepath)
+
+    logging.info("preparando ({0})".format(filename))
+
+    unzip_with_replace(filepath, workdir)
+
+    systemload = os.path.join(workdir, 'systemload')
+    move_dir_with_replace(workdir, systemload)
+
+
+def install_dicionario(workdir, instdir):
+    targdir = os.path.join(instdir, 'protheus_data')
+    logging.info("instalando dicionario")
+
+    # fix: test result
+    move_dir_with_replace(workdir, targdir)
+
+
+'''
+protheus dictionary install process
+'''
+
+def prepare_help(filepath, workdir):
+    dirpath = os.path.dirname(filepath)
+    filename = os.path.basename(filepath)
+
+    logging.info("preparando ({0})".format(filename))
+
+    unzip_with_replace(filepath, workdir)
+
+    bra = os.path.join(workdir, 'bra')
+    systemload = os.path.join(workdir, 'systemload')
+    
+    move_dir_with_replace(bra, systemload)
+    remove_files(bra)
+
+
+def install_help(workdir, instdir):
+    targdir = os.path.join(instdir, 'protheus_data')
+    logging.info("instalando helps")
+
+    # fix: test result
+    move_dir_with_replace(workdir, targdir)
+
+
+'''
+protheus menu install process
+'''
+
+def prepare_menu(filepath, workdir):
+    dirpath = os.path.dirname(filepath)
+    filename = os.path.basename(filepath)
+
+    logging.info("preparando ({0})".format(filename))
+
+    unzip_with_replace(filepath, workdir)
+
+    system = os.path.join(workdir, 'system')
+    move_dir_with_replace(workdir, system)
+
+
+
+def install_menu(workdir, instdir):
+    targdir = os.path.join(instdir, 'protheus_data')
+    logging.info("instalando menus")
+
+    # fix: test result
+    move_dir_with_replace(workdir, targdir)
+
+
+'''
+protheus system directory move
+'''
+
+def move_to_system(filepath, instdir):
+    filename = os.path.basename(filepath)
+    targfile = os.path.join(instdir, 'protheus_data', 'system', filename)
+    copy_file_with_replace(filepath, targfile)
+
+
+'''
+protheus apo directory move
+'''
+
+def move_to_apo(filepath, instdir):
+    filename = os.path.basename(filepath).split('-')[-1].lower()
+    targfile = os.path.join(instdir, 'apo', filename)
+    copy_file_with_replace(filepath, targfile)
+
+
+'''
+identify package to install and start install process
+'''
+
+def install_package(workdir, instdir, filepath):
+    filename = os.path.basename(filepath)
+
+    if re.match('.+dbaccess.+linux', filepath, re.I):
+        logging.info("dbaccess linux ({0})".format(filename))
+        prepare_linux_dbaccess(filepath, workdir)
+        install_linux_dbaccess(workdir, instdir)
+        remove_files(workdir)
+
+    if re.match('.+binario.+linux', filepath, re.I):
+        logging.info("binario linux ({0})".format(filename))
+        prepare_linux_binario(filepath, workdir)
+        install_linux_binario(workdir, instdir)
+        remove_files(workdir)
+    
+    if re.match('.+dicionarios', filepath, re.I):
+        logging.info("dicionario ({0})".format(filename))
+        prepare_dicionario(filepath, workdir)
+        install_dicionario(workdir, instdir)
+        remove_files(workdir)
+    
+    if re.match('.+bra.+helps', filepath, re.I):
+        logging.info("helps ({0})".format(filename))
+        prepare_help(filepath, workdir)
+        install_help(workdir, instdir)
+        remove_files(workdir)
+
+    if re.match('.+bra.+menus', filepath, re.I):
+        logging.info("menus ({0})".format(filename))
+        prepare_menu(filepath, workdir)
+        install_menu(workdir, instdir)
+        remove_files(workdir)
+
+    if re.match('.+ttt.+rpo$', filepath, re.I):
+        logging.info("repositorio ({0})".format(filename))
+        move_to_apo(filepath, instdir)
+
+    if re.match('.+sigaadv.pss', filepath, re.I):
+        logging.info("arquivo ({0})".format(filename))
+        move_to_system(filepath, instdir)
+
+    if re.match('.+sigapss.spf', filepath, re.I):
+        logging.info("arquivo ({0})".format(filename))
+        move_to_system(filepath, instdir)
+
+
+def scan_install_package(args):
+    workdir = '/tmp/workdir/'
+    instdir = '/protheus/'
+
+    for path, dirs, files in os.walk('./packages'):
+        for file in files:
+            filepath = os.path.join(path, file)
+            install_package(workdir, instdir, filepath)
 
 
 def run_dbaccess():
@@ -59,264 +426,9 @@ def run_appserver():
                     print('{0} executando'.format(filename))
 
 
-def move_to(location1, location2):
-    for root, dirs, files in os.walk(location1):
-        for filename in files:
-            filepath1 = os.path.join(root, filename)
-            # adjust dest path
-            filepath2 = filepath1.split(os.sep)
-            filepath2[0] = location2
-            filepath2 = os.path.join(*filepath2)
-            try:
-                shutil.copy2(filepath1, filepath2)
-            except FileNotFoundError:
-                os.makedirs(os.path.dirname(filepath2))
-                shutil.copy2(filepath1, filepath2)
-            except PermissionError:
-                os.chmod(filepath2, stat.S_IWUSR)
-                shutil.copy2(filepath1, filepath2)
-
-
-def _install_binary(package, params):
-    print('instalando pacote binario {0}'.format(package))
-    clean_sandbox()
-    unzip_to(package, 'sandbox')
-
-    # descompacta tudo!
-    unpack = True
-    while unpack:
-        unpack = False
-        for root, dirs, files in os.walk('sandbox'):
-            for filename in files:
-                filepath = os.path.join(root, filename)
-                extension = os.path.splitext(filepath)[1]
-
-                if extension.lower() in ['.gz', '.z']:
-                    print('untar {0} to {1}'.format(filepath, root))
-                    untar_to(filepath, root)
-                    try_remove(filepath)
-                    unpack = True
-
-                if extension.lower() in ['.zip']:
-                    print('unzip {0} to {1}'.format(filepath, root))
-                    unzip_to(filepath, root)
-                    try_remove(filepath)
-                    unpack = True
-
-            if 'appsrvlinux' in files:
-                print('renomeando {0} para {1}'.format('appsrvlinux',
-                        'appserver'))
-                os.rename(os.path.join(root, 'appsrvlinux'),
-                        os.path.join(root, 'appserver'))
-
-    # busca o ace de versao maior
-    maior_ace = ''
-    for root, dirs, files in os.walk('sandbox'):
-        for dirname in dirs:
-            if dirname.lower().startswith('ace'):
-                if dirname > maior_ace:
-                    maior_ace = dirname
-
-    # copia dados do maior ace no appserver
-    for root, dirs, files in os.walk('sandbox'):
-        if root.lower().endswith(maior_ace):
-            upperdir = os.path.join(root, '..')
-            for filename in files:
-                filepath = os.path.join(root, filename)
-                print('copiando {0} para {1}'.format(filepath, upperdir))
-                shutil.copy2(filepath, upperdir)
-
-    # ultimos ajustes
-    for root, dirs, files in os.walk('sandbox'):
-        if 'appserverLinux' in dirs:
-            print('renomeando {0} para {1}'.format('appserverLinux',
-                    'appserver'))
-            os.rename(os.path.join(root, 'appserverLinux'),
-                    os.path.join(root, 'appserver'))
-
-        if 'smartclientLinux' in dirs:
-            print('renomeando {0} para {1}'.format('smartclientLinux',
-                    'smartclient'))
-            os.rename(os.path.join(root, 'smartclientLinux'),
-                    os.path.join(root, 'smartclient'))
-
-    # ajustando as configuracao do sandbox
-    print('movendo {0} para {1}'.format('sandbox', 'bin'))
-    move_to('sandbox', 'bin')
-
-
-def _install_dbaccess(package, params):
-    print('instalando pacote dbaccess {0}'.format(package))
-    clean_sandbox()
-
-    dbaccess = os.path.join('sandbox', 'dbaccess')
-    os.makedirs(dbaccess)
-    untar_to(package, dbaccess)
-
-    # copia dados do maior ace no appserver
-    for root, dirs, files in os.walk('sandbox'):
-        if root.lower().endswith('multi'):
-            upperdir = os.path.join(root, '..')
-            for filename in files:
-                filepath = os.path.join(root, filename)
-                print('copiando {0} para {1}'.format(filepath, upperdir))
-                shutil.copy2(filepath, upperdir)
-            shutil.rmtree(root)
-
-        # corrigindo permissao do dbmonitor
-        if 'dbmonitor' in files:
-            filepath = os.path.join(root, 'dbmonitor')
-            os.chmod(filepath,  stat.S_IRWXU|stat.S_IRGRP|
-                    stat.S_IXGRP|stat.S_IROTH|stat.S_IXOTH)
-
-    print('movendo {0} para {1}'.format('sandbox', 'bin'))
-    move_to('sandbox', 'bin')
-
-
-def _install_dictionary(package, params):
-    print('instalando pacote dicionario {0}'.format(package))
-    clean_sandbox()
-
-    systemload = os.path.join('sandbox', 'systemload')
-    unzip_to(package, systemload)
-
-    for root, dirs, files in os.walk('.'):
-        for filename in files:
-            if filename.startswith('hlp'):
-                move_to(root, '..')
-
-    print('movendo {0} para {1}'.format('sandbox', 'protheus_data'))
-    move_to('sandbox', 'protheus_data')
-
-def _install_helps(package, params):
-    print('instalando pacote helps {0}'.format(package))
-    clean_sandbox()
-
-    systemload = os.path.join('sandbox', 'systemload')
-    unzip_to(package, systemload)
-
-    print('movendo {0} para {1}'.format('sandbox', 'protheus_data'))
-    move_to('sandbox', 'protheus_data')
-
-
-def _install_menus(package, params):
-    print('instalando pacote menus {0}'.format(package))
-    clean_sandbox()
-
-    system = os.path.join('sandbox', 'system')
-    unzip_to(package, system)
-
-    os.mkdir(os.path.join(system, 'data'))
-
-    print('movendo {0} para {1}'.format('sandbox', 'protheus_data'))
-    move_to('sandbox', 'protheus_data')
-
-
-def _install_rpo(package, params):
-    print('instalando pacote apo {0}'.format(package))
-    clean_sandbox()
-
-    rpo = package.split('-')[-1].lower()
-    rpo = os.path.join('sandbox', rpo)
-    shutil.copy2(package, rpo)
-
-    print('movendo {0} para {1}'.format('sandbox', 'apo'))
-    move_to('sandbox', 'apo')
-
-
-def _install_pss(package, params):
-    print('instalando pacote pss {0}'.format(package))
-    clean_sandbox()
-
-    system = os.path.join('sandbox', 'system', package)
-    os.makedirs(os.path.dirname(system))
-    shutil.copy2(package, system)
-
-    print('movendo {0} para {1}'.format('sandbox', 'protheus_data'))
-    move_to('sandbox', 'protheus_data')
-
-
-# fixme: adicionado como contorno pois appserver nao esta gerando automaticamente
-def _install_spf(package, params):
-    print('instalando pacote spf {0}'.format(package))
-    clean_sandbox()
-
-    system = os.path.join('sandbox', 'system', package)
-    os.makedirs(os.path.dirname(system))
-    shutil.copy2(package, system)
-
-    print('movendo {0} para {1}'.format('sandbox', 'protheus_data'))
-    move_to('sandbox', 'protheus_data')
-
-
-def _install_appserverini(package, params):
-    print('instalando pacote {0}'.format(package))
-    clean_sandbox()
-
-    system = os.path.join('sandbox', 'appserver', 'appserver.ini')
-    os.makedirs(os.path.dirname(system))
-    shutil.copy2(package, system)
-
-    print('movendo {0} para {1}'.format('sandbox', 'bin'))
-    move_to('sandbox', 'bin')
-
-
-def install_packages(params):
-    create_sandbox()
-
-    for i in os.listdir('.'):
-        backup = False
-
-        if 'bina' in i.lower():
-            _install_binary(i, params)
-            backup = True
-
-        if 'menu' in i.lower():
-            _install_menus(i, params)
-            backup = True
-
-        if 'dbac' in i.lower():
-            _install_dbaccess(i, params)
-            backup = True
-
-        if 'dici' in i.lower() and 'compl' in i.lower():
-            _install_dictionary(i, params)
-            backup = True
-
-        if 'help' in i.lower() and 'compl' in i.lower():
-            _install_helps(i, params)
-            backup = True
-
-        if i.lower().endswith('.rpo'):
-            _install_rpo(i, params)
-            backup = True
-
-        if i.lower().endswith('.pss'):
-            _install_pss(i, params)
-            backup = True
-
-        # fixme: adicionado como contorno pois appserver nao esta gerando
-        if i.lower().endswith('.spf'):
-            _install_spf(i, params)
-            backup = True
-
-        if i.lower().endswith('appserver.ini'):
-            _install_appserverini(i, params)
-            backup = True
-
-        if backup:
-            try:
-                os.mkdir('backup')
-                shutil.move(i, 'backup')
-            except:
-                shutil.move(i, 'backup')
-
-    shutil.rmtree('sandbox')
-
-
 def main(args):
     if args.install:
-        install_packages(args)
+        scan_install_package(args)
     if args.start_dbaccess:
         run_dbaccess()
     if args.start_appserver:

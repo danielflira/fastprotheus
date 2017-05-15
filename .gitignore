@@ -1,0 +1,8 @@
+
+.vagrant/
+*.gz
+*.zip
+*.rpo
+*.pss
+*.spf
+*.rar

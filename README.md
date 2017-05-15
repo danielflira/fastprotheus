@@ -1,0 +1,2 @@
+- separar o appserver.ini do bootstrap
+- passar diretorios por parametros para o protheus.py

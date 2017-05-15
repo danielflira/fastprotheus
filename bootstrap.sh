@@ -6,7 +6,7 @@
 
 # instalando pacotes necessarios
 apt-get update
-apt-get install -y postgresql-9.4 unixodbc odbc-postgresql python3 unzip vnc4server fluxbox aterm git
+apt-get install -y postgresql-9.4 unixodbc odbc-postgresql python3
 
 
 ################################################################################
@@ -53,20 +53,17 @@ EOF
 chown vagrant.vagrant /etc/odbc.ini
 
 ################################################################################
-## move os arquivos do protheus para dentro da vm
-################################################################################
-
-# copia arquivos para outro diretorio
-echo "copiando /vagrant para /protheus, aguarde pode demorar..."
-cp -R /vagrant /protheus
-chown -R vagrant.vagrant /protheus
-
-################################################################################
 ## instala pacotes do protheus
 ################################################################################
 
 # instala os arquivos
-su - vagrant -c "cd /protheus; python3 protheus.py --install"
+cd /vagrant
+python3 protheus.py --install
+
+chmod -R 0775 /protheus
+chown -R vagrant.vagrant /protheus
+
+cp /vagrant/protheus.py /protheus
 
 ################################################################################
 ## configura o dbaccess para o banco postgres
@@ -76,7 +73,7 @@ su - vagrant -c "cd /protheus; python3 protheus.py --install"
 odbclib=$(du -a /usr/lib/ | grep -i libodbc.so.1 | awk '$1==0{print($2)}')
 
 # configurando o dbaccess para o banco
-cat <<EOF > /protheus/bin/dbaccess/dbaccess.ini
+cat <<EOF > /protheus/dbaccess/multi/dbaccess.ini
 
 [General]
 LicenseServer=
@@ -93,7 +90,7 @@ clientlibrary=${odbclib}
 
 EOF
 
-chown vagrant.vagrant /protheus/bin/dbaccess/dbaccess.ini
+chown vagrant.vagrant /protheus/dbaccess/multi/dbaccess.ini
 
 ################################################################################
 ## configura o appserver para utilizar esse arquivo
@@ -103,7 +100,7 @@ chown vagrant.vagrant /protheus/bin/dbaccess/dbaccess.ini
 cd /protheus
 
 # configurado o appserver
-cat <<EOF > ${PWD}/bin/appserver/appserver.ini
+cat <<EOF > /protheus/bin/appserver/appserver.ini
 [PROTHEUS12]
 SOURCEPATH=${PWD}/apo
 ROOTPATH=${PWD}/protheus_data
@@ -152,81 +149,6 @@ EOF
 chown vagrant.vagrant ${PWD}/bin/appserver/appserver.ini
 
 ################################################################################
-## preparando interface da vm
-################################################################################
-
-mkdir -p /home/vagrant/.vnc
-
-cat <<EOF > /home/vagrant/.vnc/xstartup
-#!/bin/sh
-
-[ -x /etc/vnc/xstartup ] && exec /etc/vnc/xstartup
-[ -r $HOME/.Xresources ] && xrdb $HOME/.Xresources
-vncconfig -iconic &
-fluxbox &
-EOF
-
-chown -R vagrant.vagrant /home/vagrant
-chmod +x /home/vagrant/.vnc/xstartup
-
-################################################################################
-## patching vnc4server para nao solicitar senha
-################################################################################
-
-(cd / && patch -p1) << \EOF
---- a/usr/bin/vnc4server    2017-04-07 19:28:41.137779800 -0300
-+++ b/usr/bin/vnc4server    2017-04-07 19:31:20.064961000 -0300
-@@ -41,6 +41,16 @@
- # Global variables.  You may want to configure some of these for your site.
- #
- 
-+# check disabled password patch
-+$password = 1;
-+for ($i = 0; $i < scalar @ARGV; $i++) {
-+    if ($ARGV[$i] == '-nopasswd') {
-+        splice(@ARGV, $i);
-+        $password = 0;
-+        last;
-+    }
-+}
-+
- $geometry = "1024x768";
- $depth = 16;
- $vncJavaFiles = (((-d "/usr/share/vnc-java") && "/usr/share/vnc-java") ||
-@@ -187,7 +197,7 @@
- # Make sure the user has a password.
- 
- ($z,$z,$mode) = stat("$vncUserDir/passwd");
--if (!(-e "$vncUserDir/passwd") || ($mode & 077)) {
-+if ( (!(-e "$vncUserDir/passwd") || ($mode & 077)) && ($password) ) {
-     warn "\nYou will require a password to access your desktops.\n\n";
-     system("vncpasswd $vncUserDir/passwd"); 
-     if (($? >> 8) != 0) {
-@@ -257,7 +267,14 @@
- $cmd .= " -depth $depth" if ($depth);
- $cmd .= " -pixelformat $pixelformat" if ($pixelformat);
- $cmd .= " -rfbwait 30000";
--$cmd .= " -rfbauth $vncUserDir/passwd";
-+
-+# check password usage
-+if ( $password ) {
-+    $cmd .= " -rfbauth $vncUserDir/passwd";
-+} else {
-+    $cmd .= " -SecurityTypes None";
-+}
-+
- $cmd .= " -rfbport $vncPort";
- $cmd .= " -pn";
-EOF
-
-################################################################################
-## noVNC
-################################################################################
-
-su - vagrant -c "git clone https://github.com/kanaka/noVNC"
-echo "http://localhost:6080/vnc.html?host=localhost&port=6080"
-
-################################################################################
 ## inicia o ambiente
 ################################################################################
 
@@ -239,12 +161,6 @@ cd /protheus
 # inicia o protheus
 python3 protheus.py --start-dbaccess &
 python3 protheus.py --start-appserver &
-
-# inicia o vnc
-su - vagrant -c "vncserver :1 -geometry 1024x768 -nopasswd" &
-
-# inciia o noVNC
-su - vagrant -c "cd noVNC; sleep 5; ./utils/launch.sh --vnc localhost:5901" &
 EOF
 
 chmod +x /etc/rc.local
