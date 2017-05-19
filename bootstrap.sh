@@ -109,7 +109,7 @@ EOF
 # alias configurado
 export TOPALIAS=protheus
 
-chown vagrant.vagrant /protheus/dbaccess/multi/dbaccess.ini
+chown vagrant.vagrant ${PWD}/dbaccess/multi/dbaccess.ini
 
 ################################################################################
 ## configura o appserver para utilizar esse arquivo
@@ -136,3 +136,6 @@ python3 protheus.py --start-appserver &
 EOF
 
 chmod +x /etc/rc.local
+
+# start the system
+/etc/rc.local
