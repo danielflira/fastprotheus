@@ -338,9 +338,19 @@ def move_to_apo(filepath, instdir):
     copy_file_with_replace(filepath, targfile)
 
     # check rpo version
-    versao = re.search('(\d+).rpo', filename, re.I).groups()
+    groups = re.search('(\w)(\d+).rpo', filename, re.I).groups()
+    lang = groups[0].lower()
+    versao = groups[1]
+
+    if lang == 'p':
+        print('export RPOLANGUAGE=portuguese')
+    elif lang == 'e':
+        print('export RPOLANGUAGE=english')
+    elif lang == 's':
+        print('export RPOLANGUAGE=spanish')
+
     if len(versao) > 0:
-        print('export RPOVERSION={0}'.format(versao[0]))
+        print('export RPOVERSION={0}'.format(versao))
 
 
 '''
